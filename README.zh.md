@@ -1,73 +1,101 @@
-# dsh-lmstudio-long-prefill（中文说明）
+# dsh-lmstudio-long-prefill
 
-## 这个插件是干什么的
+**修复本地 OpenAI 兼容 provider 的 5 分钟 undici `headersTimeout` 中断问题。**
 
-**一句话：让本地 LM Studio 跑长上下文、长生成（long-prefill / long-generation）时不再因 300 秒超时被掐断。**
+一个 [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/dsh) 插件：让本地模型（LM Studio、vLLM、Ollama、llama.cpp 等）跑长上下文 Prefill 和长生成时不再因 300 秒超时被掐断。
 
-DSH 默认用浏览器/Node 的 `fetch`（底层是 undici）去访问模型 API。undici 有一个
-**300 秒的 `headersTimeout`**：如果模型在 300 秒内还没返回响应头，连接就被强制断开。
-本地小模型（比如 3B~7B 级、在消费级 GPU 上跑）做**长 prefill**（输入很长、要把整个
-context 先算一遍）或**长生成**（输出很长、要持续吐 token）时，经常超过 300 秒——于是
-请求被掐断，DSH 报错，任务失败。
+> 🇬🇧 English docs: **[README.md](./README.md)**
 
-这个插件把 DSH 访问**本地 OpenAI 兼容端点**（LM Studio、vLLM、llama.cpp 等）时的
-`getDefaultFetch` 换成走 **`node:http`** 的原生实现：`node:http` **没有 300 秒
-headersTimeout**，连接可以一直等，直到模型真正返回。这样长 prefill / 长生成就不会被
-超时掐断，能稳定跑完。
+---
 
-## 为什么它很重要（意义）
+## 问题
 
-- **本地模型能用得起来**：没有这个 patch，本地慢模型在长任务上基本不可用（动辄 300 秒
-  超时）。有了它，长上下文压缩、长文档处理、长生成才能稳定完成。
-- **对远程/快模型无影响**：patch 只对**本地 OpenAI 路由**（`localhost` / `127.0.0.1` /
-  `::1` 上的 `/v1/chat/completions` 等）生效；其它路由仍然走原来的 `fetch`，行为不变。
-- **自动恢复，不怕升级覆盖**（关键特性）：这个 patch 写在 `node_modules/openai/` 里，
-  而 `npm install` 重装 openai 包会把它**覆盖掉**。本插件在**每次 DSH 加载时都会自动
-  重新应用** patch（幂等，已打过就跳过），所以即使将来 openai 包升级覆盖了 patch，
-  下次启动 DSH 就会**自动补回**——你不需要手动重打。
+DSH 通过 OpenAI SDK → Node 内置 `fetch`（undici）访问模型 API。undici 有一个 **300 秒的 `headersTimeout`**：如果模型在 5 分钟内还没返回响应头，连接就被强制断开。
 
-## 它是怎么工作的（机制）
+本地小模型（消费级 GPU 上的 3B–7B）做**长 prefill**（输入很长、要把整个 context 先算一遍）或**长生成**（输出很长、要持续吐 token）时经常超过 300 秒 → 请求被掐断 → DSH 报 `TRANSPORT / terminated`。
 
-1. **定位**：插件加载时，从模块所在目录向上找 `node_modules/openai/internal/shims.{mjs,js}`
-   （覆盖 profile 安装、npx 缓存等常见位置）。
-2. **判断**：读文件，检查是否已打过 patch（用 `[dsh-lmstudio-long-prefill]` 标记 + 恰好
-   1 个 `node:http` import 作为「健康」判据）。
-   - 健康 → 跳过（幂等，不重复写）。
-   - 没打过 / 被打坏（重复声明）→ 重建。
-3. **重建**：把文件还原成「原始核心」（剥掉所有 patch 痕迹：helper 函数、node import、
-   重复的 `getDefaultFetch`、孤儿函数体），再**恰好应用一次**我们的 `node:http` 版
-   `getDefaultFetch`。这样无论是干净文件、已打补丁文件、还是被打坏的文件，重建后都是
-   干净、可加载、幂等的。
-4. **兜底**：同时给 `globalThis.fetch` 装一个本地路由回退（会话结束自动还原），双保险。
+- OpenAI SDK 自带的 `timeoutMs` 是一个 `setTimeout`，**一旦收到响应头就被清除**——它**不能**覆盖 undici 内部的 `headersTimeout`。
+- 加大 `maxRetries` 没用：失败是**确定性的**（每次都在恰好 5 分钟时死）。
+
+## 解决方案
+
+插件在**每次 DSH 加载时**都会**自动修复 SDK 补丁**：
+
+1. **定位**运行时可达的所有 `openai/internal/shims.{mjs,js}`（profile `node_modules`、npx 缓存 DSH 安装、插件自身所在目录）。
+2. **重新修补** `getDefaultFetch`，把本地 OpenAI 兼容请求路由到 **`node:http`**（无 headers/body 超时）。重写是**幂等**的——用标记注释做守卫，重复加载是空操作。
+3. **安装 `globalThis.fetch` 兜底**（双保险），覆盖绕过 SDK shims 的请求路径。
+
+因为补丁在每次加载时都会重新应用，即使 `npm install` 覆盖了 `openai` 包，**下次 DSH 启动就会自动补回**——无需手动操作。
+
+### 为什么用 `node:http` 而不是 `undici.Agent`？
+
+教科书方案是 `fetchOptions: { dispatcher: new undici.Agent({ headersTimeout: 0 }) }`。但 Node 24 里 `undici` **不是可 require 的包**（内置但未导出）。所以我们替换 `getDefaultFetch()` 拿到的全局 `fetch`——对这条代码路径等效，零新依赖。
+
+### 为什么用标准插件而不是动态插件？
+
+**动态** Cordis 插件运行在受限沙箱里，没有 `require`、`http`、`fetch`、`globalThis` 的访问权限。**标准**插件是普通 ESM npm 包，有完整 Node 访问权限——它住在 profile 的 `node_modules` 里，DSH 升级也不会动它。
+
+## 哪些路由受影响（哪些不受）
+
+| 路由 | 行为 |
+|------|------|
+| `http://127.0.0.1:1234/v1/chat/completions` | ✅ `node:http` — 无超时 |
+| `http://localhost:8000/v1/responses` | ✅ `node:http` — 无超时 |
+| `https://api.openai.com/v1/chat/completions` | ❌ 不动 — 走原来的 undici `fetch` |
+| 任何非 OpenAI URL | ❌ 不动 — 直接透传 |
+
+插件只拦截**本地** OpenAI 兼容端点（`127.0.0.1`、`localhost`、`::1`）。远程 API 完全不受影响。
 
 ## 安装
 
-官方 CLI（推荐）：
-
 ```bash
-dsh plugin --profile <你的profile> add dsh-lmstudio-long-prefill
+# 官方 CLI（推荐）
+dsh plugin --profile <你的profile> add dsh-lmstudio-long-prefill@0.4.0
+
+# 或手动
+cd <profile目录>
+npm install file:<路径>/dsh-lmstudio-long-prefill
 ```
 
-或手动：把 `dsh-lmstudio-long-prefill` 加进 profile 的 `dsh.profile.bundles` + 依赖，
-`pnpm install`，重启 DSH。
+然后**新开一个会话**（插件挂载在启动时读取）。
 
 ## 验证
 
-新开一个会话，跑一个**长 prefill**（比如给本地模型塞很长的上下文）或**长生成**任务，
-确认不再出现 300 秒超时断开。也可以直接看：
+1. 用之前 5 分钟超时的长上下文 prompt 重新测试。
+2. 如果仍然失败，失败时间会在**更长的墙钟时间**（10–30+ 分钟）而不是恰好 5 分钟——确认 undici `headersTimeout` 是根因。
+3. 检查补丁是否到位：
+   ```bash
+   node -e "const m = require('openai/internal/shims.js'); console.log('patched:', m.getDefaultFetch.toString().includes('node:http'))"
+   ```
+
+## 与 dsh-compaction-tool 的配合
+
+如果你同时用了 [`dsh-compaction-tool`](https://github.com/deepseek-ai/dsh-compaction-tool)（把压缩 offload 到快速副模型），本插件保证副模型做**长压缩调用**时（输入 = 整段历史 = 长 prefill）不会因 300 秒超时被掐断。两个插件互补。
+
+## 配置
+
+无。路由分类由 URL 决定，没有可调参数。要改哪些路由走长超时，编辑 `lib/index.mjs` 里的 `OPENAI_PATHS` / `LOCAL_HOSTS` 集合。
+
+## 卸载
 
 ```bash
-node -e "import('openai/internal/shims.mjs').then(m=>console.log('patched:', m.getDefaultFetch!==globalThis.fetch))"
+cd <profile目录>
+npm uninstall dsh-lmstudio-long-prefill
+# 从 package.json 的 dsh.profile.bundles 里移除（如有）
 ```
 
-## 与压缩插件的配合
+然后重启 DSH。`node_modules/openai/` 里的文件补丁会保留（无害），但不再安装新的 fetch 包装器。
 
-如果你同时用了 `dsh-compaction-tool`（把压缩 offload 到快的副模型），本插件保证那个
-**副模型做长压缩时**（输入 = 整段历史，往往是长 prefill）不会因为 300 秒超时被掐断——
-两者配合，本地慢模型 + 长任务才能稳定跑通。
+## 项目结构
 
-## 注意
+```
+dsh-lmstudio-long-prefill/
+├── lib/index.mjs             # 插件源码（单文件，ESM）
+├── cordis.patch.yml          # Bundle 挂载补丁
+├── README.md / README.zh.md  # 本文件
+└── LICENSE                   # MIT
+```
 
-- 只对**本地 OpenAI 兼容端点**生效；远程 API（如 OpenAI 官方、Anthropic）行为完全不变。
-- patch 是**幂等**的：重复加载不会重复写文件；被打坏的文件会被自动修复。
-- 不修改 openai 包的其它任何导出；只替换 `getDefaultFetch` 一个函数的行为。
+## 许可证
+
+[MIT](./LICENSE) © 2025
