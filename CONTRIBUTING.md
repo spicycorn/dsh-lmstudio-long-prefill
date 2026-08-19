@@ -1,4 +1,4 @@
-# Contributing to dsh-lmstudio-long-prefill
+# Contributing to dsh-local-model-long-prefill
 
 感谢你的兴趣！本插件是 [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/dsh) 的社区插件。
 
@@ -12,8 +12,9 @@
 ```bash
 # 在 profile 目录安装本地版本
 cd ~/.dsh/profiles/<your-profile>
-npm install file:<path-to>/dsh-lmstudio-long-prefill
+npm install file:<path-to>/dsh-local-model-long-prefill
 # 重启 DSH，新开一个会话，跑一个长 prefill 测试
+# 检查 settings.yaml 是否被自动修改（streamIdleTimeoutMs 应为 1800000）
 ```
 
 ## 发布
@@ -32,6 +33,8 @@ npm publish --access public
 - `OPENAI_PATHS` — OpenAI 兼容路径集合
 - `LOCAL_HOSTS` — 本地主机名集合
 - `isLongPrefillRoute()` — 路由分类逻辑
+- `isLocalOrLanHost()` — 本地/局域网主机识别
+- `DEFAULT_STREAM_IDLE_TIMEOUT_MS` — settings.yaml 自动重写的目标超时值
 
 ## 提交规范
 

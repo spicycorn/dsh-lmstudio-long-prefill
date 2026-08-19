@@ -1,12 +1,12 @@
-# dsh-lmstudio-long-prefill bundle patch
+# dsh-local-model-long-prefill bundle patch
 #
 # This file is the `dsh.bundle.patch` layer of the published npm package: when
 # the plugin is installed through the official CLI —
 #
-#   dsh plugin --profile <name> add dsh-lmstudio-long-prefill@<version>
+#   dsh plugin --profile <name> add dsh-local-model-long-prefill@<version>
 #
 # — the command reconciles `dsh.profile.bundles` against installed packages
-# and, seeing this declaration, appends `dsh-lmstudio-long-prefill` to the
+# and, seeing this declaration, appends `dsh-local-model-long-prefill` to the
 # bundle stack. The profile boot then merges THIS patch (a single `insert` of
 # the plugin row) exactly like the manual cordis.patch.yml mount line used
 # before. No profile file edits needed — one command installs and mounts.
@@ -15,5 +15,5 @@
 # cordis.patch.yml, remove it before switching to the bundle channel to
 # avoid double-mounting (two Node halves, two fetch wrappers).
 - insert:
-    - id: lmstudio-long-prefill
-      name: 'dsh-lmstudio-long-prefill'
+    - id: local-model-long-prefill
+      name: 'dsh-local-model-long-prefill'
