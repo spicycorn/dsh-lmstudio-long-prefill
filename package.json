@@ -1,7 +1,7 @@
 {
   "name": "dsh-local-model-long-prefill",
-  "version": "1.0.0",
-  "description": "Fixes the 5-min undici headersTimeout abort and the pi-ai stream idle watchdog for local OpenAI-compatible providers (LM Studio, vLLM, Ollama, llama.cpp, etc.). On every load the plugin SELF-HEALS the OpenAI SDK patch (node:http, no timeout) and automatically rewrites settings.yaml to raise streamIdleTimeoutMs for local providers — no manual config editing required.",
+  "version": "1.1.0",
+  "description": "Fixes the undici headersTimeout abort, the OpenAI SDK per-request timeout (default 600s → 'Request timed out.' at exactly +10 min), and the pi-ai stream idle watchdog for local OpenAI-compatible providers (LM Studio, vLLM, Ollama, llama.cpp, etc.). On every load the plugin SELF-HEALS the OpenAI SDK patch (node:http, no timeout) and automatically rewrites settings.yaml to raise BOTH timeoutMs AND streamIdleTimeoutMs for local/LAN providers — no manual config editing required.",
   "type": "module",
   "main": "lib/index.mjs",
   "exports": {
